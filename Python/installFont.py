@@ -1,0 +1,76 @@
+# -*- coding: UTF-8 -*-
+import os
+import shutil
+import ctypes
+from ctypes import wintypes
+
+try:
+    import winreg
+except ImportError:
+    import _winreg as winreg
+
+user32 = ctypes.WinDLL('user32', use_last_error=True)
+gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)
+
+UserSID = 'S-%s' %os.popen("whoami /user").read().rsplit("S-", 1)[1].strip()
+FONTS_REG_PATH = r'%s\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts' %UserSID
+
+HWND_BROADCAST   = 0xFFFF
+SMTO_ABORTIFHUNG = 0x0002
+WM_FONTCHANGE    = 0x001D
+GFRI_DESCRIPTION = 4
+GFRI_ISTRUETYPE  = 3
+
+if not hasattr(wintypes, 'LPDWORD'):
+    wintypes.LPDWORD = ctypes.POINTER(wintypes.DWORD)
+
+user32.SendMessageTimeoutW.restype = wintypes.LPVOID
+user32.SendMessageTimeoutW.argtypes = (
+    wintypes.HWND,   # hWnd
+    wintypes.UINT,   # Msg
+    wintypes.LPVOID, # wParam
+    wintypes.LPVOID, # lParam
+    wintypes.UINT,   # fuFlags
+    wintypes.UINT,   # uTimeout
+    wintypes.LPVOID) # lpdwResult
+
+gdi32.AddFontResourceW.argtypes = (
+    wintypes.LPCWSTR,) # lpszFilename
+
+gdi32.GetFontResourceInfoW.argtypes = (
+    wintypes.LPCWSTR, # lpszFilename
+    wintypes.LPDWORD, # cbBuffer
+    wintypes.LPVOID,  # lpBuffer
+    wintypes.DWORD)   # dwQueryType
+    
+
+class install_font():
+
+    def __init__(self, src_path, fontname):
+        # copy the font to the Windows Fonts folder
+        dst_path = os.path.join(os.environ['LOCALAPPDATA'], 'Microsoft\Windows\Fonts', os.path.basename(src_path))
+        shutil.copy(src_path, dst_path)
+        # load the font in the current session
+        if not gdi32.AddFontResourceW(dst_path):
+            os.remove(dst_path)
+            raise WindowsError('AddFontResource failed to load "%s"' % src_path)
+        # notify running programs
+        user32.SendMessageTimeoutW(HWND_BROADCAST, WM_FONTCHANGE, 0, 0, SMTO_ABORTIFHUNG, 1000, None)
+        """
+        # try to get the font's real name
+        cb = wintypes.DWORD()
+        if gdi32.GetFontResourceInfoW(filename, ctypes.byref(cb), str, GFRI_DESCRIPTION):
+            buf = (ctypes.c_wchar * cb.value)()
+            print(str)
+            if gdi32.GetFontResourceInfoW(filename, ctypes.byref(cb), buf, GFRI_DESCRIPTION):
+                fontname = buf.value
+                print(fontname)
+        is_truetype = wintypes.BOOL()
+        cb.value = ctypes.sizeof(is_truetype)
+        gdi32.GetFontResourceInfoW(filename, ctypes.byref(cb), ctypes.byref(is_truetype), GFRI_ISTRUETYPE)
+        if is_truetype:
+            fontname += ' (TrueType)'
+        """
+        fontname = u'%s (TrueType)' %fontname
+        with winreg.OpenKey(winreg.HKEY_USERS, FONTS_REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, fontname, 0, winreg.REG_SZ, dst_path)
